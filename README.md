@@ -4,9 +4,10 @@
 
 此Vite插件 适用于 HiAPI-Cloud 子应用前端开发
 
+npm config set registry https://registry.npmjs.org/
 
+登陆: `npm login`
 发布: `npm publish --access public`
 
-npm config set registry https://registry.npmjs.org/
 
 npm config set registry https://registry.npmmirror.com/
