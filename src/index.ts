@@ -1,10 +1,12 @@
 // @ts-ignore
-import type { Plugin } from 'vite'
+import type {Plugin} from 'vite'
 import fs from 'fs'
 import path from 'path'
 import axios, {type AxiosResponse} from 'axios'
 import FormData from 'form-data'
 import archiver from 'archiver'
+import vm from 'vm'
+
 
 export interface UploadPluginOptions {
     server: string; // 服务器上传地址，例如 https://api.example.com/upload
@@ -16,6 +18,7 @@ export interface UploadPluginOptions {
     componentDir: string; // 默认 dist/index.umd.js
     disable?: boolean; //是否禁用上传
     version?: string; //插件版本
+    remark?: string; //插件版本
 }
 interface UploadResponse<T> {
     code :number
@@ -53,6 +56,15 @@ function removeImports(filePath:string) {
             return `const ${name} = null;`;
         }
     );
+    content = content.replace(/^export\s+(type|interface|class)\s+\w+\s*[\s\S]*?\}\s*;?\s*$/gm, '');
+    content = content.replace(/^export\s+function\s+\w+\s*\([^)]*\)\s*\{[\s\S]*?\}\s*$/gm, '');
+
+// 再处理剩余的 export (兜底)
+    content = content.replace(/^export\s+[\s\S]*?;?\s*$/gm, '');
+
+    content = content.replace(/(const|let|var)\s+(\w+)\s*:\s*\w+\s*=/g, '$1 $2 =');
+    content = content.replace(/(const|let|var)\s+(\w+)\s*:\s*[^=]+?\s*=/g, '$1 $2 =');
+
     content = content.replace(/import\s+\{[\s\S]*?\}\s+from\s+['"][^'"]+['"];?\s*/g, '');
     content = content.replace(/import\s+\w+\s+from\s+['"][^'"]+['"];?\s*/g, '');
     content = content.replace(/import\s+['"][^'"]+['"];?\s*/g, '');
@@ -60,7 +72,22 @@ function removeImports(filePath:string) {
     content = content.replace(/import\s+\*\s+as\s+\w+\s+from\s+['"][^'"]+['"];?\s*/g, '');
     content = content.replace(/\n{3,}/g, '\n\n');
     content = content.replace(/^[ \t]+/gm, '');
+    content += '\n\nmodule.exports = { widgetExport };';
     fs.writeFileSync(filePath, content, 'utf-8');
+}
+
+
+function getJsVariables(filePath:string) {
+    const content = fs.readFileSync(filePath, 'utf-8');
+
+    // 创建沙箱
+    const sandbox = {
+        module: { exports: {} },
+    };
+
+    // 执行代码（变量会写入 sandbox）
+    vm.runInNewContext(content, sandbox);
+    return sandbox.module.exports['widgetExport'];
 }
 
 
@@ -161,13 +188,13 @@ export function UploadPlugin(options: UploadPluginOptions): Plugin {
             fs.cpSync(path.resolve(process.cwd(), `src/components/index.ts`),path.resolve(process.cwd(),`dist/zip/components/index.ts`),{recursive:true})
 
             removeImports(path.resolve(process.cwd(),`dist/zip/components/index.ts`))
-            const widgetExport =  require(path.resolve(process.cwd(),`dist/zip/components/index.ts`))
 
-            if (!widgetExport|| !widgetExport.default || widgetExport.default.length<=0){
+            const widgetExport =     getJsVariables(path.resolve(process.cwd(),`dist/zip/components/index.ts`))
+
+            if (!widgetExport||Object.values(widgetExport).length===0){
                 throw new Error('组件模板数据为空')
             }
-
-            const data = JSON.stringify(widgetExport.default);
+            const data = JSON.stringify(Object.values(widgetExport));
 
 
             fs.writeFileSync(path.resolve(process.cwd(),`dist/zip/components/index.json`), data, 'utf-8');
@@ -176,7 +203,7 @@ export function UploadPlugin(options: UploadPluginOptions): Plugin {
             await  compressFolder(path.resolve(process.cwd(),'dist/zip'),zipFile)
 
 
-            console.log('打包文件夹完成，开始上传...',)
+            console.log('打包文件夹完成，开始上传...')
 
 
 
@@ -190,6 +217,7 @@ export function UploadPlugin(options: UploadPluginOptions): Plugin {
                 form.append('appId', appId)
                 form.append('appSecret', appSecret)
                 form.append('project', options.project)
+                form.append('remark', options.remark)
                 form.append('version', version)
                 form.append('components', data)
                 form.append('file', fs.createReadStream(distPath))
@@ -206,8 +234,7 @@ export function UploadPlugin(options: UploadPluginOptions): Plugin {
                 }
                 console.log(`✅ 已上传: ${path.relative(distPath, file)}`)
             } catch (err: any) {
-                console.error(`❌ 上传失败: ${file}`)
-                console.error(err.message)
+                console.error(`❌ 上传失败: ${err}`)
             }
         },
     }
