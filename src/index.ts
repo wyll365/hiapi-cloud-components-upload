@@ -7,6 +7,10 @@ import FormData from 'form-data'
 import archiver from 'archiver'
 import vm from 'vm'
 
+export type Page ={
+    path: string
+    name: string
+}
 
 export interface UploadPluginOptions {
     server: string; // 服务器上传地址，例如 https://api.example.com/upload
@@ -19,6 +23,7 @@ export interface UploadPluginOptions {
     disable?: boolean; //是否禁用上传
     version?: string; //插件版本
     remark?: string; //插件版本
+    pages: Page[]
 }
 interface UploadResponse<T> {
     code :number
@@ -221,6 +226,9 @@ export function UploadPlugin(options: UploadPluginOptions): Plugin {
                 form.append('appSecret', appSecret)
                 form.append('project', options.project)
                 form.append('remark', options.remark||'')
+                form.append('pageDir', options.pageDir||'')
+                form.append('componentDir', options.componentDir||'')
+                form.append('pages', options.pages||[])
                 form.append('version', version)
                 form.append('components', data)
                 form.append('file', fs.createReadStream(distPath))
