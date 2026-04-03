@@ -15,7 +15,7 @@
                 version: pkg.version, // 版本号
                 disable: false, // 是否禁用上传
                 pageDir: 'pages', // 页面目录
-                componentDir: 'hiapi-public', // 组件目录
+                cc: 'hiapi-public', // 组件目录
                 remark:'组件库发布', // 备注
                 pages:[ //对外公布页面列表
                     { name:'首页', path:'pages/index/index' },

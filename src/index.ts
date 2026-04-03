@@ -200,7 +200,7 @@ export function UploadPlugin(options: UploadPluginOptions): Plugin {
                 throw new Error('组件模板数据为空')
             }
 
-            fs.rmSync(path.resolve(process.cwd(),`dist/zip/components/index.ts`))
+            fs.rmSync(path.resolve(process.cwd(),`dist/zip/components/index.ts`),{force:true,recursive:true})
 
             const data = JSON.stringify(Object.values(widgetExport));
 
@@ -228,7 +228,7 @@ export function UploadPlugin(options: UploadPluginOptions): Plugin {
                 form.append('remark', options.remark||'')
                 form.append('pageDir', options.pageDir||'')
                 form.append('componentDir', options.componentDir||'')
-                form.append('pages', options.pages||[])
+                form.append('pages', JSON.stringify(options.pages||[]))
                 form.append('version', version)
                 form.append('components', data)
                 form.append('file', fs.createReadStream(distPath))
@@ -243,8 +243,8 @@ export function UploadPlugin(options: UploadPluginOptions): Plugin {
                 if ( ![201,200].includes(response.status)  ) {
                     console.error(`❌ 服务器返回失败: ${response.data.message}`)
                 }
-                fs.rmSync(zipFile)
-                fs.rmSync(zipDir)
+                fs.rmSync(zipFile,{ recursive: true, force: true })
+                fs.rmSync(zipDir,{ recursive: true, force: true })
                 console.log(`✅ 已上传: ${path.relative(distPath, file)}`)
             } catch (err: any) {
                 console.error(`❌ 上传失败: ${err}`)
