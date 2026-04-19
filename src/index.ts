@@ -18,8 +18,8 @@ export interface UploadPluginOptions {
     appId?: string; // 可选鉴权 token
     appSecret?: string; // 可选鉴权 token
     file: string; // 默认 dist/index.umd.js
-    pageDir: string; // 默认 dist/index.umd.js
-    componentDir: string; // 默认 dist/index.umd.js
+    pageDir?: string; // 页面目录
+    componentDir?: string; // 组件目录
     disable?: boolean; //是否禁用上传
     version?: string; //插件版本
     remark?: string; //插件版本
@@ -159,16 +159,20 @@ export function UploadPlugin(options: UploadPluginOptions): Plugin {
 
             const distPath = path.resolve(process.cwd(), file)
 
-            const pageDirPath = path.resolve(process.cwd(), `src/${options.pageDir}`)
-            const componentDirPath = path.resolve(process.cwd(), `src/components/${options.componentDir}`)
+            const pageDirPath:string|undefined = options.pageDir? path.resolve(process.cwd(), `src/${options.pageDir}`):undefined
+            const componentDirPath:string|undefined = options.componentDir? path.resolve(process.cwd(), `src/components/${options.componentDir}`):undefined
 
-            if(!fs.existsSync(pageDirPath)){
-                console.error(`❌ 页面目录不存在: ${pageDirPath}`)
-                throw new Error(`页面目录不存在: ${pageDirPath}`)
+            if (pageDirPath) {
+                if (!fs.existsSync(pageDirPath)) {
+                    console.error(`❌ 页面目录不存在: ${pageDirPath}`)
+                    throw new Error(`页面目录不存在: ${pageDirPath}`)
+                }
             }
-            if(!fs.existsSync(componentDirPath)){
-                console.error(`❌ 组件目录不存在: ${componentDirPath}`)
-                throw new Error(`组件目录不存在: ${componentDirPath}`)
+            if(componentDirPath) {
+                if (!fs.existsSync(componentDirPath)) {
+                    console.error(`❌ 组件目录不存在: ${componentDirPath}`)
+                    throw new Error(`组件目录不存在: ${componentDirPath}`)
+                }
             }
 
 
@@ -187,35 +191,25 @@ export function UploadPlugin(options: UploadPluginOptions): Plugin {
             if (fs.existsSync(zipFile)){
                 fs.rmSync(zipFile,{ recursive: true })
             }
-            fs.cpSync(pageDirPath,path.resolve(process.cwd(),`dist/zip/${options.pageDir}`),{recursive:true});
-
-            fs.cpSync(componentDirPath,path.resolve(process.cwd(),`dist/zip/components/${options.componentDir}`),{recursive:true})
-            fs.cpSync(path.resolve(process.cwd(), `src/components/index.ts`),path.resolve(process.cwd(),`dist/zip/components/index.ts`),{recursive:true})
-
-            removeImports(path.resolve(process.cwd(),`dist/zip/components/index.ts`))
-
-            const widgetExport =     getJsVariables(path.resolve(process.cwd(),`dist/zip/components/index.ts`))
-
-            if (!widgetExport||Object.values(widgetExport).length===0){
-                throw new Error('组件模板数据为空')
+            if (pageDirPath) fs.cpSync(pageDirPath,path.resolve(process.cwd(),`dist/zip/${options.pageDir}`),{recursive:true});
+            if(componentDirPath) fs.cpSync(componentDirPath,path.resolve(process.cwd(),`dist/zip/components/${options.componentDir}`),{recursive:true})
+            if (componentDirPath) fs.cpSync(path.resolve(process.cwd(), `src/components/index.ts`),path.resolve(process.cwd(),`dist/zip/components/index.ts`),{recursive:true})
+            if (componentDirPath)  removeImports(path.resolve(process.cwd(),`dist/zip/components/index.ts`))
+            let data:string|undefined =undefined;
+            if(componentDirPath) {
+                const widgetExport = getJsVariables(path.resolve(process.cwd(), `dist/zip/components/index.ts`))
+                if (!widgetExport || Object.values(widgetExport).length === 0) {
+                    throw new Error('组件模板数据为空')
+                }
+                fs.rmSync(path.resolve(process.cwd(), `dist/zip/components/index.ts`), {force: true, recursive: true})
+                data = JSON.stringify(Object.values(widgetExport));
+                fs.writeFileSync(path.resolve(process.cwd(),`dist/zip/components/index.json`), data, 'utf-8');
             }
 
-            fs.rmSync(path.resolve(process.cwd(),`dist/zip/components/index.ts`),{force:true,recursive:true})
-
-            const data = JSON.stringify(Object.values(widgetExport));
-
-
-            fs.writeFileSync(path.resolve(process.cwd(),`dist/zip/components/index.json`), data, 'utf-8');
-
-
-            await  compressFolder(path.resolve(process.cwd(),'dist/zip'),zipFile)
-
-
-            console.log('打包文件夹完成，开始上传...')
-
-
-
-
+            if(pageDirPath) {
+                await compressFolder(path.resolve(process.cwd(), 'dist/zip'), zipFile)
+                console.log('打包文件夹完成，开始上传...')
+            }
             if (!fs.existsSync(distPath)) {
                 console.error(`❌ 文件不存在: ${distPath}`)
                 return
@@ -226,14 +220,13 @@ export function UploadPlugin(options: UploadPluginOptions): Plugin {
                 form.append('appSecret', appSecret)
                 form.append('project', options.project)
                 form.append('remark', options.remark||'')
-                form.append('pageDir', options.pageDir||'')
-                form.append('componentDir', options.componentDir||'')
+                if (options.pageDir) form.append('pageDir', options.pageDir||'')
+                if (options.componentDir) form.append('componentDir', options.componentDir||'')
                 form.append('pages', JSON.stringify(options.pages||[]))
                 form.append('version', version)
-                form.append('components', data)
+                if(data)form.append('components', data)
                 form.append('file', fs.createReadStream(distPath))
-                form.append('zip', fs.createReadStream(zipFile))
-
+                if (zipFile)  form.append('zip', fs.createReadStream(zipFile))
                 const response: AxiosResponse<UploadResponse<any>> = await axios.post(server, form, {
                     headers: {
                         ...form.getHeaders(),
