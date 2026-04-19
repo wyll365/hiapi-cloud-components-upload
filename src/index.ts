@@ -138,14 +138,6 @@ export function UploadPlugin(options: UploadPluginOptions): Plugin {
     }
 
 
-    if(!options.pageDir){
-        throw new Error('请指定页面目录')
-    }
-
-    if (!options.componentDir){
-        throw new Error('请指定组件目录')
-    }
-
     return {
         name: 'vite-upload-plugin',
         apply: 'build',
@@ -174,23 +166,25 @@ export function UploadPlugin(options: UploadPluginOptions): Plugin {
                     throw new Error(`组件目录不存在: ${componentDirPath}`)
                 }
             }
-
-
-            const zipDir =path.resolve(process.cwd(),'dist/zip')
-            const zipFile = path.resolve(process.cwd(),'dist/zip.zip');
-
-
-            if(!fs.existsSync(zipDir)){
-                fs.mkdirSync(zipDir)
-            }else{
-                fs.rmSync(zipDir,{ recursive: true })
-                console.log('清理旧的zip目录完成')
-                fs.mkdirSync(zipDir)
-                console.log('创建新的zip目录完成')
+            let zipDir:string|undefined =undefined
+            let zipFile:string|undefined =undefined
+            if (pageDirPath) {
+                zipDir = path.resolve(process.cwd(), 'dist/zip')
+                zipFile = path.resolve(process.cwd(), 'dist/zip.zip');
+                if(!fs.existsSync(zipDir)){
+                    fs.mkdirSync(zipDir)
+                }else{
+                    fs.rmSync(zipDir,{ recursive: true })
+                    console.log('清理旧的zip目录完成')
+                    fs.mkdirSync(zipDir)
+                    console.log('创建新的zip目录完成')
+                }
+                if (fs.existsSync(zipFile)){
+                    fs.rmSync(zipFile,{ recursive: true })
+                }
             }
-            if (fs.existsSync(zipFile)){
-                fs.rmSync(zipFile,{ recursive: true })
-            }
+
+
             if (pageDirPath) fs.cpSync(pageDirPath,path.resolve(process.cwd(),`dist/zip/${options.pageDir}`),{recursive:true});
             if(componentDirPath) fs.cpSync(componentDirPath,path.resolve(process.cwd(),`dist/zip/components/${options.componentDir}`),{recursive:true})
             if (componentDirPath) fs.cpSync(path.resolve(process.cwd(), `src/components/index.ts`),path.resolve(process.cwd(),`dist/zip/components/index.ts`),{recursive:true})
@@ -206,7 +200,7 @@ export function UploadPlugin(options: UploadPluginOptions): Plugin {
                 fs.writeFileSync(path.resolve(process.cwd(),`dist/zip/components/index.json`), data, 'utf-8');
             }
 
-            if(pageDirPath) {
+            if(pageDirPath && zipFile) {
                 await compressFolder(path.resolve(process.cwd(), 'dist/zip'), zipFile)
                 console.log('打包文件夹完成，开始上传...')
             }
