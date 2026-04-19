@@ -20,6 +20,8 @@ export interface Menu {
     langCode: string, //多语言编码
     icon: string, //图标
     secured: string, // 权限标识
+    url: string,//网址呢
+    accountType?: string,
 }
 
 
