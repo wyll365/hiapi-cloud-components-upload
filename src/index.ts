@@ -7,33 +7,45 @@ import FormData from 'form-data'
 import archiver from 'archiver'
 import vm from 'vm'
 
-export type Page ={
+export type Page = {
     path: string
     name: string
 }
+
+export interface Menu {
+    menuId: number, //菜单id
+    pid: number, //上级id
+    label: string, //名称
+    shortLabel: string, //简短名称
+    langCode: string, //多语言编码
+    icon: string, //图标
+    secured: string, // 权限标识
+}
+
 
 export interface UploadPluginOptions {
     server: string; // 服务器上传地址，例如 https://api.example.com/upload
     project: string; // 项目名称
     appId?: string; // 可选鉴权 token
     appSecret?: string; // 可选鉴权 token
-    file: string; // 默认 dist/index.umd.js
+    files: string[]; // 默认 dist/index.umd.js
     pageDir?: string; // 页面目录
     componentDir?: string; // 组件目录
     disable?: boolean; //是否禁用上传
     version?: string; //插件版本
     remark?: string; //插件版本
-    pages: Page[]
+    pages?: Page[],
+    menus?: Menu[]
 }
+
 interface UploadResponse<T> {
-    code :number
-    message : string
-    data : T
+    code: number
+    message: string
+    data: T
 }
 
 
-
-function removeImports(filePath:string) {
+function removeImports(filePath: string) {
     let content = fs.readFileSync(filePath, 'utf-8');
     content = content.replace(/HiapiCloudSchema/g, () => {
         return 'any';
@@ -82,12 +94,12 @@ function removeImports(filePath:string) {
 }
 
 
-function getJsVariables(filePath:string) {
+function getJsVariables(filePath: string) {
     const content = fs.readFileSync(filePath, 'utf-8');
 
     // 创建沙箱
     const sandbox = {
-        module: { exports: {} },
+        module: {exports: {}},
     };
 
     // 执行代码（变量会写入 sandbox）
@@ -96,14 +108,14 @@ function getJsVariables(filePath:string) {
 }
 
 
-function compressFolder(sourceDir:string, outputZip:string): Promise<void> {
+function compressFolder(sourceDir: string, outputZip: string): Promise<void> {
     return new Promise<void>((resolve, reject) => {
         // 创建输出流
         const output = fs.createWriteStream(outputZip);
 
         // 创建 archiver 实例
         const archive = archiver('zip', {
-            zlib: { level: 9 } // 压缩级别 0-9，9 为最高压缩
+            zlib: {level: 9} // 压缩级别 0-9，9 为最高压缩
         });
 
         // 监听事件
@@ -131,10 +143,10 @@ function compressFolder(sourceDir:string, outputZip:string): Promise<void> {
 
 
 export function UploadPlugin(options: UploadPluginOptions): Plugin {
-    const {server, appId, appSecret, file,version='0.0.0',disable=false } = options
+    const {server, appId, appSecret, files, version = '0.0.0', disable = false} = options
 
     if (!options.project) {
-       throw new Error('请指定项目名')
+        throw new Error('请指定项目名')
     }
 
 
@@ -143,16 +155,20 @@ export function UploadPlugin(options: UploadPluginOptions): Plugin {
         apply: 'build',
         async closeBundle() {
 
-            if (disable===true){
+            if (disable === true) {
                 return //上传插件被禁用,
             }
 
             console.log(`\n📦  开始上传编译文件到服务器: ${server}`)
 
-            const distPath = path.resolve(process.cwd(), file)
+            //多个要打包上传的目录
+            const distPaths = files.map(file => {
+                return path.resolve(process.cwd(), file)
+            })
 
-            const pageDirPath:string|undefined = options.pageDir? path.resolve(process.cwd(), `src/${options.pageDir}`):undefined
-            const componentDirPath:string|undefined = options.componentDir? path.resolve(process.cwd(), `src/components/${options.componentDir}`):undefined
+
+            const pageDirPath: string | undefined = options.pageDir ? path.resolve(process.cwd(), `src/${options.pageDir}`) : undefined
+            const componentDirPath: string | undefined = options.componentDir ? path.resolve(process.cwd(), `src/components/${options.componentDir}`) : undefined
 
             if (pageDirPath) {
                 if (!fs.existsSync(pageDirPath)) {
@@ -160,79 +176,90 @@ export function UploadPlugin(options: UploadPluginOptions): Plugin {
                     throw new Error(`页面目录不存在: ${pageDirPath}`)
                 }
             }
-            if(componentDirPath) {
+            if (componentDirPath) {
                 if (!fs.existsSync(componentDirPath)) {
                     console.error(`❌ 组件目录不存在: ${componentDirPath}`)
                     throw new Error(`组件目录不存在: ${componentDirPath}`)
                 }
             }
-            let zipDir:string|undefined =undefined
-            let zipFile:string|undefined =undefined
+            let zipDir: string | undefined = undefined
+            let zipFile: string | undefined = undefined
             if (pageDirPath) {
                 zipDir = path.resolve(process.cwd(), 'dist/zip')
                 zipFile = path.resolve(process.cwd(), 'dist/zip.zip');
-                if(!fs.existsSync(zipDir)){
+                if (!fs.existsSync(zipDir)) {
                     fs.mkdirSync(zipDir)
-                }else{
-                    fs.rmSync(zipDir,{ recursive: true })
+                } else {
+                    fs.rmSync(zipDir, {recursive: true})
                     console.log('清理旧的zip目录完成')
                     fs.mkdirSync(zipDir)
                     console.log('创建新的zip目录完成')
                 }
-                if (fs.existsSync(zipFile)){
-                    fs.rmSync(zipFile,{ recursive: true })
+                if (fs.existsSync(zipFile)) {
+                    fs.rmSync(zipFile, {recursive: true})
                 }
             }
 
 
-            if (pageDirPath) fs.cpSync(pageDirPath,path.resolve(process.cwd(),`dist/zip/${options.pageDir}`),{recursive:true});
-            if(componentDirPath) fs.cpSync(componentDirPath,path.resolve(process.cwd(),`dist/zip/components/${options.componentDir}`),{recursive:true})
-            if (componentDirPath) fs.cpSync(path.resolve(process.cwd(), `src/components/index.ts`),path.resolve(process.cwd(),`dist/zip/components/index.ts`),{recursive:true})
-            if (componentDirPath)  removeImports(path.resolve(process.cwd(),`dist/zip/components/index.ts`))
-            let data:string|undefined =undefined;
-            if(componentDirPath) {
+            if (pageDirPath) fs.cpSync(pageDirPath, path.resolve(process.cwd(), `dist/zip/${options.pageDir}`), {recursive: true});
+            if (componentDirPath) fs.cpSync(componentDirPath, path.resolve(process.cwd(), `dist/zip/components/${options.componentDir}`), {recursive: true})
+            if (componentDirPath) fs.cpSync(path.resolve(process.cwd(), `src/components/index.ts`), path.resolve(process.cwd(), `dist/zip/components/index.ts`), {recursive: true})
+            if (componentDirPath) removeImports(path.resolve(process.cwd(), `dist/zip/components/index.ts`))
+            let data: string | undefined = undefined;
+            if (componentDirPath) {
                 const widgetExport = getJsVariables(path.resolve(process.cwd(), `dist/zip/components/index.ts`))
                 if (!widgetExport || Object.values(widgetExport).length === 0) {
                     throw new Error('组件模板数据为空')
                 }
                 fs.rmSync(path.resolve(process.cwd(), `dist/zip/components/index.ts`), {force: true, recursive: true})
                 data = JSON.stringify(Object.values(widgetExport));
-                fs.writeFileSync(path.resolve(process.cwd(),`dist/zip/components/index.json`), data, 'utf-8');
+                fs.writeFileSync(path.resolve(process.cwd(), `dist/zip/components/index.json`), data, 'utf-8');
             }
 
-            if(pageDirPath && zipFile) {
+            if (pageDirPath && zipFile) {
                 await compressFolder(path.resolve(process.cwd(), 'dist/zip'), zipFile)
                 console.log('打包文件夹完成，开始上传...')
             }
-            if (!fs.existsSync(distPath)) {
-                console.error(`❌ 文件不存在: ${distPath}`)
-                return
+            for (let i = 0; i < distPaths.length; i++) {
+                const distPath = distPaths[i]
+                if (!fs.existsSync(distPath)) {
+                    console.error(`❌ 文件不存在: ${distPath}`)
+                    return
+                }
             }
             try {
                 const form = new FormData()
                 form.append('appId', appId)
                 form.append('appSecret', appSecret)
                 form.append('project', options.project)
-                form.append('remark', options.remark||'')
-                if (options.pageDir) form.append('pageDir', options.pageDir||'')
-                if (options.componentDir) form.append('componentDir', options.componentDir||'')
-                form.append('pages', JSON.stringify(options.pages||[]))
+                form.append('remark', options.remark || '')
                 form.append('version', version)
-                if(data)form.append('components', data)
-                form.append('file', fs.createReadStream(distPath))
-                if (zipFile)  form.append('zip', fs.createReadStream(zipFile))
+                if (options.pageDir) form.append('pageDir', options.pageDir || '')
+                if (options.componentDir) form.append('componentDir', options.componentDir || '')
+                if (options.pages) form.append('pages', JSON.stringify(options.pages || []))
+                if (options.menus) form.append('menus', JSON.stringify(options.menus || []))
+                if (data) form.append('components', data)
+                for (let i = 0; i < distPaths.length; i++) {
+                    const distPath = distPaths[i]
+                    if (!fs.existsSync(distPath)) {
+                        console.error(`❌ 文件不存在: ${distPath}`)
+                        return
+                    }
+                    form.append('files', fs.createReadStream(distPath))
+                }
+                if (zipFile) form.append('zip', fs.createReadStream(zipFile))
                 const response: AxiosResponse<UploadResponse<any>> = await axios.post(server, form, {
                     headers: {
                         ...form.getHeaders(),
                     },
                     maxBodyLength: Infinity,
                 })
-                if ( ![201,200].includes(response.status)  ) {
+                if (![201, 200].includes(response.status)) {
                     console.error(`❌ 服务器返回失败: ${response.data.message}`)
                 }
-                fs.rmSync(zipFile,{ recursive: true, force: true })
-                fs.rmSync(zipDir,{ recursive: true, force: true })
-                console.log(`✅ 已上传: ${path.relative(distPath, file)}`)
+                if (zipFile) fs.rmSync(zipFile, {recursive: true, force: true})
+                if (zipDir) fs.rmSync(zipDir, {recursive: true, force: true})
+                console.log(`✅ 已上传: ${response.data}`)
             } catch (err: any) {
                 console.error(`❌ 上传失败: ${err}`)
             }
