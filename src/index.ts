@@ -22,6 +22,7 @@ export interface Menu {
     secured: string, // 权限标识
     url: string,//网址呢
     accountType?: string,
+    sort: number,
 }
 
 
