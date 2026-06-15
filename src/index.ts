@@ -264,7 +264,7 @@ export function UploadPlugin(options: UploadPluginOptions): Plugin {
                 if (zipDir) fs.rmSync(zipDir, {recursive: true, force: true})
                 console.log(`✅ 已上传: ${response.data}`)
             } catch (err: any) {
-                console.error(`❌ 上传失败: ${err}   msg:{${JSON.stringify(err?.response?.body)}`)
+                console.error(`❌ 上传失败: ${err}   msg:{${JSON.stringify(err?.response?.data)}`)
             }
         },
     }
