@@ -22,7 +22,7 @@ export interface Menu {
     secured: string, // 权限标识
     url: string,//网址呢
     accountType?: string,
-    sort: number,
+    sort?: number,
 }
 
 
@@ -264,7 +264,7 @@ export function UploadPlugin(options: UploadPluginOptions): Plugin {
                 if (zipDir) fs.rmSync(zipDir, {recursive: true, force: true})
                 console.log(`✅ 已上传: ${response.data}`)
             } catch (err: any) {
-                console.error(`❌ 上传失败: ${err}`)
+                console.error(`❌ 上传失败: ${err}   msg:{${JSON.stringify(err?.response?.body)}`)
             }
         },
     }
