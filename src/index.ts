@@ -43,6 +43,16 @@ export interface UploadPluginOptions {
     disable?: boolean; //是否禁用上传
     version?: string; //插件版本
     remark?: string; //插件版本
+    /**
+     * @deprecated 页面链接改为**运行期实时获取** —— 子应用实现框架的 `AppLinkProvider` SPI
+     * (`links()` / `options()`)，装修器打开链接选择器时由 hiapi-cloud-public 实时调用。
+     *
+     * 静态清单的问题：发版之后就不会再变，而且表达不了带参数的页面（商品详情、设备详情
+     * 这类必须先选出具体是哪一个）。
+     *
+     * public 侧的入库路径（AppStoreLogic.reloadPages）已删除，继续传这个字段不再有任何效果。
+     * 保留字段只是为了不让各子应用的构建立刻报错 —— 迁到 SPI 之后请删掉。
+     */
     pages?: Page[],
     menus?: Menu[],
     micro?: MicroAppMeta, // 微应用注册信息(管理后台类应用必填)
