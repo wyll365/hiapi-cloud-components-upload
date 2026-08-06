@@ -6,6 +6,7 @@ import axios, {type AxiosResponse} from 'axios'
 import FormData from 'form-data'
 import archiver from 'archiver'
 import vm from 'vm'
+import esbuild from 'esbuild'
 
 export type Page = {
     path: string
@@ -67,66 +68,105 @@ interface UploadResponse<T> {
 }
 
 
-function removeImports(filePath: string) {
-    let content = fs.readFileSync(filePath, 'utf-8');
-    content = content.replace(/HiapiCloudSchema/g, () => {
-        return 'any';
-    });
-    content = content.replace(
-        /^import\s+(\w+)\s+from\s+['"][^'"]+['"];?\s*$/gm,
-        (match, name) => {
-            return `const ${name} = null;`;
-        }
-    );
-    content = content.replace(
-        /^import\s+\{([^}]+)\}\s+from\s+['"][^'"]+['"];?\s*$/gm,
-        (match, imports) => {
-            const names = imports
-                .split(',')
-                .map(item => item.trim().split(/\s+as\s+/)[0]) // 处理 alias
-                .filter(name => name);
-            return names.map(name => `const ${name} = null;`).join('\n');
-        }
-    );
+/** stub 命名空间:解析不了 / 不该真解析的模块都落到这里 */
+const STUB_NAMESPACE = 'hiapi-upload-stub'
 
-    content = content.replace(
-        /^import\s+\*\s+as\s+(\w+)\s+from\s+['"][^'"]+['"];?\s*$/gm,
-        (match, name) => {
-            return `const ${name} = null;`;
-        }
-    );
-    content = content.replace(/^export\s+(type|interface|class)\s+\w+\s*[\s\S]*?\}\s*;?\s*$/gm, '');
-    content = content.replace(/^export\s+function\s+\w+\s*\([^)]*\)\s*\{[\s\S]*?\}\s*$/gm, '');
+/**
+ * 从组件注册表里提取 widgetExport。
+ *
+ * 做法是用 esbuild 把 `src/components/index.ts` 打成一份 CJS,再在 vm 沙箱里执行取值。
+ *
+ * 为什么不再是「正则删掉 import + 直接跑」(2026-08-05 之前的做法):
+ * 那套靠一串定制正则把 TS 洗成 JS,只在注册表恰好是「一个大对象字面量」时才成立。
+ * 它带着两条隐含约束,而且踩中时的报错都指不到点子上:
+ *
+ *   1. **注册表里不能调用任何 import 进来的函数** —— import 全被替换成 `const X = null`,
+ *      于是 `image: thumbnailOf('x')` 变成 `null('x')`,报 "thumbnailOf is not a function"。
+ *      光看这句话没人会想到「你的注册表是被沙箱执行的」。
+ *   2. **被牵连进来的本地模块不能带类型注解** —— 像 `const svg = (body: string): string =>`
+ *      这种,vm 直接 SyntaxError。正则清洗覆盖不了任意 TS 语法。
+ *
+ * esbuild 处理 TS 是它的本职,两条约束一起消失:注册表可以正常 import 本地工具函数。
+ *
+ * `.vue` 与包依赖仍然解析成空模块 —— SFC 在 node 里跑不起来,而注册表只是把组件
+ * 当值放着(`component: HiapiPublicSwiper`)从不调用它,值是不是真组件不影响提取。
+ *
+ * @param entryFile   组件注册表入口(src/components/index.ts)
+ * @param projectRoot 消费方工程根目录,用来解析 `@/` 别名
+ */
+async function extractWidgetExport(entryFile: string, projectRoot: string) {
+    // 必须用异步 build:esbuild 的 buildSync 不支持 plugins
+    // ("Cannot use plugins in synchronous API calls"),而 stub 解析全靠 plugin。
+    const result = await esbuild.build({
+        entryPoints: [entryFile],
+        bundle: true,
+        write: false,
+        format: 'cjs',
+        // 刻意**不用** platform:'node':那样 __toESM 会走 nodeMode,无条件把整个模块
+        // 塞进 default(`isNodeMode || !mod.__esModule` 短路),下面 stub 的 __esModule
+        // 标记就白设了,`Component` 会从 null 变成 {}。这里不解析任何真实包
+        // (非相对路径全被 stub 拦掉),所以平台差异没有别的影响。
+        platform: 'browser',
+        logLevel: 'silent',
+        plugins: [{
+            name: STUB_NAMESPACE,
+            setup(build) {
+                build.onResolve({filter: /.*/}, args => {
+                    if (args.kind === 'entry-point') return null
+                    const spec = args.path
+                    // `@/` 是 uni-app / vite 工程的惯例别名,指向 src。
+                    // 手动补扩展名而不用 esbuild 的 alias 选项:onResolve 返回 path 之后
+                    // esbuild 不再走扩展名解析,直接给绝对路径会找不到 .ts 文件。
+                    if (spec.startsWith('@/')) {
+                        const base = path.resolve(projectRoot, 'src', spec.slice(2))
+                        const candidates = [base, `${base}.ts`, `${base}.js`,
+                            path.join(base, 'index.ts'), path.join(base, 'index.js')]
+                        for (const c of candidates) {
+                            if (fs.existsSync(c) && fs.statSync(c).isFile()) return {path: c}
+                        }
+                        // 解析不到就当空模块,不要让整个构建挂在一个取不到的缩略图上
+                        return {path: spec, namespace: STUB_NAMESPACE}
+                    }
+                    if (spec.endsWith('.vue') || !spec.startsWith('.')) {
+                        return {path: spec, namespace: STUB_NAMESPACE}
+                    }
+                    return null
+                })
+                build.onLoad({filter: /.*/, namespace: STUB_NAMESPACE}, () => ({
+                    // 取任何成员都得到 null,与旧实现的 `const X = null` 行为一致 ——
+                    // 上报给市场的注册表里 `Component` / `Property` 必须还是 null。
+                    //
+                    // `__esModule: true` 这一手是必须的:否则 esbuild 的 __toESM 会把
+                    // 整个 stub 对象当成 default 导出,`Component` 就从 null 变成 {},
+                    // 悄悄改掉上报数据的格式(不报错、只在下游表里体现)。
+                    // Proxy 的 target 必须**真的带上** __esModule / default 两个 own key:
+                    // __toESM 走的是 __copyProps(ownKeys),空 target 复制不出任何东西,
+                    // `.default` 就成了 undefined —— 而 undefined 会被 JSON.stringify
+                    // 连键一起丢掉,上报出去的注册表里 Component 字段直接消失。
+                    contents: 'module.exports = new Proxy({__esModule: true, default: null}, '
+                        + '{get: (t, k) => k in t ? t[k] : null})',
+                    loader: 'js',
+                }))
+            },
+        }],
+    })
 
-// 再处理剩余的 export (兜底)
-    content = content.replace(/^export\s+[\s\S]*?;?\s*$/gm, '');
-
-    content = content.replace(/(const|let|var)\s+(\w+)\s*:\s*\w+\s*=/g, '$1 $2 =');
-    content = content.replace(/(const|let|var)\s+(\w+)\s*:\s*[^=]+?\s*=/g, '$1 $2 =');
-
-    content = content.replace(/import\s+\{[\s\S]*?\}\s+from\s+['"][^'"]+['"];?\s*/g, '');
-    content = content.replace(/import\s+\w+\s+from\s+['"][^'"]+['"];?\s*/g, '');
-    content = content.replace(/import\s+['"][^'"]+['"];?\s*/g, '');
-    content = content.replace(/import\s+type\s+\{[\s\S]*?\}\s+from\s+['"][^'"]+['"];?\s*/g, '');
-    content = content.replace(/import\s+\*\s+as\s+\w+\s+from\s+['"][^'"]+['"];?\s*/g, '');
-    content = content.replace(/\n{3,}/g, '\n\n');
-    content = content.replace(/^[ \t]+/gm, '');
-    content += '\n\nmodule.exports = { widgetExport };';
-    fs.writeFileSync(filePath, content, 'utf-8');
-}
-
-
-function getJsVariables(filePath: string) {
-    const content = fs.readFileSync(filePath, 'utf-8');
-
-    // 创建沙箱
+    const code = result.outputFiles[0].text
+    const moduleObj: { exports: Record<string, any> } = {exports: {}}
     const sandbox = {
-        module: {exports: {}},
-    };
+        module: moduleObj,
+        exports: moduleObj.exports,
+        require: () => null,
+        console,
+    }
+    vm.runInNewContext(code, sandbox)
 
-    // 执行代码（变量会写入 sandbox）
-    vm.runInNewContext(content, sandbox);
-    return sandbox.module.exports['widgetExport'];
+    // 两种写法都要认:具名 `export const widgetExport` 和 `export default widgetExport`。
+    // 旧实现是往洗过的源码尾巴上追加 `module.exports = { widgetExport }`,直接引用了
+    // 模块里的局部变量,所以它对导出形式根本不敏感 —— 换成真打包之后就敏感了,
+    // 而现有工程(hiapi-cloud-public-web)用的恰好是 export default。
+    const exported = moduleObj.exports
+    return exported['widgetExport'] ?? exported['default'];
 }
 
 
@@ -307,15 +347,17 @@ export function UploadPlugin(options: UploadPluginOptions): Plugin {
 
             if (pageDirPath) fs.cpSync(pageDirPath, path.resolve(process.cwd(), `dist/zip/${options.pageDir}`), {recursive: true});
             if (componentDirPath) fs.cpSync(componentDirPath, path.resolve(process.cwd(), `dist/zip/components/${options.componentDir}`), {recursive: true})
-            if (componentDirPath) fs.cpSync(path.resolve(process.cwd(), `src/components/index.ts`), path.resolve(process.cwd(), `dist/zip/components/index.ts`), {recursive: true})
-            if (componentDirPath) removeImports(path.resolve(process.cwd(), `dist/zip/components/index.ts`))
             let data: string | undefined = undefined;
             if (componentDirPath) {
-                const widgetExport = getJsVariables(path.resolve(process.cwd(), `dist/zip/components/index.ts`))
+                // 直接从源码提取,不再往 zip 里拷一份 index.ts 就地改写再删掉 ——
+                // esbuild 在内存里打包,中间产物落不到磁盘上
+                const widgetExport = await extractWidgetExport(
+                    path.resolve(process.cwd(), `src/components/index.ts`),
+                    process.cwd(),
+                )
                 if (!widgetExport || Object.values(widgetExport).length === 0) {
                     throw new Error('组件模板数据为空')
                 }
-                fs.rmSync(path.resolve(process.cwd(), `dist/zip/components/index.ts`), {force: true, recursive: true})
                 data = JSON.stringify(Object.values(widgetExport));
                 fs.writeFileSync(path.resolve(process.cwd(), `dist/zip/components/index.json`), data, 'utf-8');
             }
